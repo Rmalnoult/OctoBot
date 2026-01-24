@@ -1,0 +1,22 @@
+# Pants configuration for OctoBot
+[GLOBAL]
+pants_version = "2.30.0"
+backend_packages = [
+    "pants.backend.python",
+]
+
+[source]
+# Configure source roots for packages directory
+root_patterns = [
+    "/packages/*",
+    "/",
+]
+
+[python]
+# Python interpreter compatibility
+interpreter_constraints = [">=3.10"]
+
+[python-infer]
+# Enable dependency inference
+inits = true
+conftests = true
