@@ -38,6 +38,14 @@ try:
 
     # make tentacles importable
     sys.path.append(os.path.dirname(sys.executable))
+    
+    # Add packages/agents to Python path for octobot_agents
+    # This allows octobot_agents package to be imported
+    cli_dir = os.path.dirname(os.path.abspath(__file__))
+    octobot_dir = os.path.dirname(cli_dir)
+    packages_agents_path = os.path.join(octobot_dir, 'packages', 'agents')
+    if os.path.isdir(packages_agents_path) and packages_agents_path not in sys.path:
+        sys.path.insert(0, packages_agents_path)
 
     import octobot.octobot as octobot_class
     import octobot.commands as commands

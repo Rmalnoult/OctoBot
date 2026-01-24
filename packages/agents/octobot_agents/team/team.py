@@ -37,12 +37,21 @@ from collections import defaultdict
 
 import octobot_commons.logging as logging
 
-from octobot.agent.channel import (
+from octobot_agents.channel import (
     AbstractAgentChannel,
     AbstractAgentChannelConsumer,
     AbstractAgentChannelProducer,
     AbstractAIAgentChannelConsumer,
     AbstractAIAgentChannelProducer,
+)
+
+from octobot_agents.team.team_manager import (
+    AbstractTeamManagerAgent,
+    DefaultTeamManagerAgentProducer,
+    ExecutionPlan,
+    MODIFICATION_ADDITIONAL_INSTRUCTIONS,
+    MODIFICATION_CUSTOM_PROMPT,
+    MODIFICATION_EXECUTION_HINTS,
 )
 
 
@@ -86,6 +95,7 @@ class AbstractAgentTeamChannelProducer(AbstractAgentChannelProducer, abc.ABC):
         ai_service: typing.Any,
         team_name: typing.Optional[str] = None,
         team_id: typing.Optional[str] = None,
+        manager: typing.Optional[AbstractTeamManagerAgent] = None,
     ):
         """
         Initialize the agent team producer.
@@ -99,6 +109,7 @@ class AbstractAgentTeamChannelProducer(AbstractAgentChannelProducer, abc.ABC):
             ai_service: The AI service for LLM calls.
             team_name: Name of the team (defaults to TEAM_NAME).
             team_id: Unique identifier for this team instance.
+            manager: Optional team manager agent. If None, creates DefaultTeamManagerAgentProducer.
         """
         super().__init__(channel)
         self.agents = agents
@@ -108,10 +119,18 @@ class AbstractAgentTeamChannelProducer(AbstractAgentChannelProducer, abc.ABC):
         self.team_id = team_id or ""
         self.logger = logging.get_logger(f"{self.__class__.__name__}{f'[{self.team_id}]' if self.team_id else ''}")
         
+        # Initialize manager - use default if not provided
+        if manager is None:
+            self.manager = DefaultTeamManagerAgentProducer(channel=None)
+        else:
+            self.manager = manager
+        
         self._producer_by_channel: typing.Dict[typing.Type[AbstractAgentChannel], AbstractAIAgentChannelProducer] = {}
+        self._producer_by_name: typing.Dict[str, AbstractAIAgentChannelProducer] = {}
         for agent in self.agents:
             if agent.AGENT_CHANNEL is not None:
                 self._producer_by_channel[agent.AGENT_CHANNEL] = agent
+            self._producer_by_name[agent.AGENT_NAME] = agent
     
     def _build_dag(self) -> typing.Tuple[
         typing.Dict[typing.Type[AbstractAgentChannel], typing.List[typing.Type[AbstractAgentChannel]]],
@@ -212,6 +231,123 @@ class AbstractAgentTeamChannelProducer(AbstractAgentChannelProducer, abc.ABC):
         # Convert channel types back to producers
         return [self._producer_by_channel[ch] for ch in ordered_channels if ch in self._producer_by_channel]
     
+    async def _execute_plan(
+        self,
+        execution_plan: ExecutionPlan,
+        initial_data: typing.Dict[str, typing.Any],
+    ) -> typing.Dict[str, typing.Any]:
+        """
+        Execute an ExecutionPlan.
+        
+        Args:
+            execution_plan: The execution plan to execute
+            initial_data: Initial data to pass to entry agents
+            
+        Returns:
+            Dict with results from terminal agents
+        """
+        incoming_edges, _ = self._build_dag()
+        terminal_agents = self._get_terminal_agents()
+        
+        # Store results by agent name
+        results: typing.Dict[str, typing.Dict[str, typing.Any]] = {}
+        completed_agents: typing.Set[str] = set()
+        
+        iteration = 0
+        max_iterations = execution_plan.max_iterations or 1
+        
+        while iteration < max_iterations:
+            iteration += 1
+            self.logger.debug(f"Executing plan iteration {iteration}/{max_iterations}")
+            
+            # Execute each step in the plan
+            for step in execution_plan.steps:
+                if step.skip:
+                    self.logger.debug(f"Skipping agent: {step.agent_name}")
+                    continue
+                
+                agent = self._producer_by_name.get(step.agent_name)
+                if agent is None:
+                    self.logger.warning(f"Agent {step.agent_name} not found in team")
+                    continue
+                
+                # Wait for dependencies if specified
+                if step.wait_for:
+                    for dep_name in step.wait_for:
+                        if dep_name not in completed_agents:
+                            self.logger.debug(f"Waiting for dependency: {dep_name}")
+                            # In a real implementation, we might want to wait for actual completion
+                            # For now, we assume dependencies are already completed
+                
+                # Send instructions if provided
+                if step.instructions:
+                    instruction_dict: typing.Dict[str, typing.Any] = {}
+                    for instruction in step.instructions:
+                        if instruction.modification_type == MODIFICATION_ADDITIONAL_INSTRUCTIONS:
+                            instruction_dict[MODIFICATION_ADDITIONAL_INSTRUCTIONS] = instruction.value
+                        elif instruction.modification_type == MODIFICATION_CUSTOM_PROMPT:
+                            instruction_dict[MODIFICATION_CUSTOM_PROMPT] = instruction.value
+                        elif instruction.modification_type == MODIFICATION_EXECUTION_HINTS:
+                            instruction_dict[MODIFICATION_EXECUTION_HINTS] = instruction.value
+                    
+                    if instruction_dict:
+                        await self.manager.send_instruction_to_agent(agent, instruction_dict)
+                
+                # Gather inputs from predecessors
+                channel_type = agent.AGENT_CHANNEL
+                if channel_type is None:
+                    continue
+                
+                predecessors = incoming_edges.get(channel_type, [])
+                
+                if not predecessors:
+                    # Entry agent: use initial_data
+                    agent_input = initial_data
+                else:
+                    # Non-entry agent: gather predecessor outputs
+                    agent_input = {}
+                    for pred_channel in predecessors:
+                        pred_agent = self._producer_by_channel.get(pred_channel)
+                        if pred_agent and pred_agent.AGENT_NAME in results:
+                            pred_result = results[pred_agent.AGENT_NAME]
+                            agent_input[pred_agent.AGENT_NAME] = {
+                                AbstractAgentChannel.AGENT_NAME_KEY: pred_agent.AGENT_NAME,
+                                AbstractAgentChannel.AGENT_ID_KEY: "",
+                                AbstractAgentChannel.RESULT_KEY: pred_result.get(AbstractAgentChannel.RESULT_KEY),
+                            }
+                
+                # Execute agent
+                self.logger.debug(f"Executing agent: {agent.AGENT_NAME}")
+                try:
+                    result = await agent.execute(agent_input, self.ai_service)
+                    results[agent.AGENT_NAME] = {
+                        AbstractAgentChannel.AGENT_NAME_KEY: agent.AGENT_NAME,
+                        AbstractAgentChannel.AGENT_ID_KEY: "",
+                        AbstractAgentChannel.RESULT_KEY: result,
+                    }
+                    completed_agents.add(agent.AGENT_NAME)
+                except Exception as e:
+                    self.logger.error(f"Agent {agent.AGENT_NAME} execution failed: {e}")
+                    raise
+            
+            # Check loop condition
+            if not execution_plan.loop:
+                break
+            
+            # Evaluate loop condition (simplified - in real implementation, this would be more sophisticated)
+            if execution_plan.loop_condition:
+                self.logger.debug(f"Loop condition: {execution_plan.loop_condition}")
+                # For now, we'll break after one iteration if loop_condition is set
+                # In a real implementation, this would evaluate the condition
+        
+        # Collect terminal results
+        terminal_results: typing.Dict[str, typing.Any] = {}
+        for agent in terminal_agents:
+            if agent.AGENT_NAME in results:
+                terminal_results[agent.AGENT_NAME] = results[agent.AGENT_NAME].get(AbstractAgentChannel.RESULT_KEY)
+        
+        return terminal_results
+    
     @abc.abstractmethod
     async def run(self, initial_data: typing.Dict[str, typing.Any]) -> typing.Dict[str, typing.Any]:
         """
@@ -262,13 +398,10 @@ class AbstractSyncAgentTeamChannelProducer(AbstractAgentTeamChannelProducer):
     
     async def run(self, initial_data: typing.Dict[str, typing.Any]) -> typing.Dict[str, typing.Any]:
         """
-        Execute the team pipeline synchronously in topological order.
+        Execute the team pipeline synchronously using the manager.
         
-        1. Compute topological order of agents
-        2. For each agent in order:
-           - Gather outputs from predecessor agents
-           - Call execute() directly
-           - Store result for successor agents
+        1. Get ExecutionPlan from manager.execute()
+        2. Execute the plan
         3. Return terminal agent results
         
         Args:
@@ -277,60 +410,20 @@ class AbstractSyncAgentTeamChannelProducer(AbstractAgentTeamChannelProducer):
         Returns:
             Dict with results from all terminal agents.
         """
-        execution_order = self._get_execution_order()
-        incoming_edges, _ = self._build_dag()
-        terminal_agents = self._get_terminal_agents()
+        # Build input_data for manager
+        manager_input = {
+            "team_producer": self,
+            "initial_data": initial_data,
+            "instructions": None,  # Can be extended to accept instructions
+        }
         
-        # Store results by channel type
-        results: typing.Dict[typing.Type[AbstractAgentChannel], typing.Dict[str, typing.Any]] = {}
+        # Get execution plan from manager
+        execution_plan = await self.manager.execute(manager_input, self.ai_service)
         
-        self.logger.info(f"Starting sync execution with {len(execution_order)} agents")
+        # Execute the plan
+        terminal_results = await self._execute_plan(execution_plan, initial_data)
         
-        for agent in execution_order:
-            channel_type = agent.AGENT_CHANNEL
-            if channel_type is None:
-                continue
-            
-            # Gather inputs from predecessors
-            predecessors = incoming_edges.get(channel_type, [])
-            
-            if not predecessors:
-                # Entry agent: use initial_data
-                agent_input = initial_data
-            else:
-                # Non-entry agent: gather predecessor outputs
-                agent_input = {}
-                for pred_channel in predecessors:
-                    pred_agent = self._producer_by_channel.get(pred_channel)
-                    if pred_agent and pred_channel in results:
-                        pred_result = results[pred_channel]
-                        agent_input[pred_agent.AGENT_NAME] = {
-                            AbstractAgentChannel.AGENT_NAME_KEY: pred_agent.AGENT_NAME,
-                            AbstractAgentChannel.AGENT_ID_KEY: "",
-                            AbstractAgentChannel.RESULT_KEY: pred_result.get(AbstractAgentChannel.RESULT_KEY),
-                        }
-            
-            # Execute agent
-            self.logger.info(f"Executing agent: {agent.AGENT_NAME}")
-            try:
-                result = await agent.execute(agent_input, self.ai_service)
-                results[channel_type] = {
-                    AbstractAgentChannel.AGENT_NAME_KEY: agent.AGENT_NAME,
-                    AbstractAgentChannel.AGENT_ID_KEY: "",
-                    AbstractAgentChannel.RESULT_KEY: result,
-                }
-            except Exception as e:
-                self.logger.error(f"Agent {agent.AGENT_NAME} execution failed: {e}")
-                raise
-        
-        # Collect terminal results
-        terminal_results: typing.Dict[str, typing.Any] = {}
-        for agent in terminal_agents:
-            channel_type = agent.AGENT_CHANNEL
-            if channel_type and channel_type in results:
-                terminal_results[agent.AGENT_NAME] = results[channel_type].get(AbstractAgentChannel.RESULT_KEY)
-        
-        self.logger.info(f"Sync execution completed with {len(terminal_results)} results")
+        self.logger.debug(f"Sync execution completed with {len(terminal_results)} results")
         
         # Push team result if we have a channel
         if self.channel is not None:
@@ -360,8 +453,9 @@ class AbstractLiveAgentTeamChannelProducer(AbstractAgentTeamChannelProducer):
         ai_service: typing.Any,
         team_name: typing.Optional[str] = None,
         team_id: typing.Optional[str] = None,
+        manager: typing.Optional[AbstractTeamManagerAgent] = None,
     ):
-        super().__init__(channel, agents, relations, ai_service, team_name, team_id)
+        super().__init__(channel, agents, relations, ai_service, team_name, team_id, manager)
         
         # Live-specific state
         self._channels: typing.Dict[typing.Type[AbstractAgentChannel], AbstractAgentChannel] = {}
@@ -441,7 +535,7 @@ class AbstractLiveAgentTeamChannelProducer(AbstractAgentTeamChannelProducer):
                     agent_name=terminal_agent.AGENT_NAME,
                 )
         
-        self.logger.info(
+        self.logger.debug(
             f"Team setup complete: {len(self._entry_agents)} entry agents, "
             f"{len(self._terminal_agents)} terminal agents, "
             f"{len(self.relations)} relations"
@@ -478,7 +572,7 @@ class AbstractLiveAgentTeamChannelProducer(AbstractAgentTeamChannelProducer):
             
             # Trigger when all inputs received
             if len(received_inputs) >= expected_count:
-                self.logger.info(f"Triggering {target_producer.AGENT_NAME} with {len(received_inputs)} inputs")
+                self.logger.debug(f"Triggering {target_producer.AGENT_NAME} with {len(received_inputs)} inputs")
                 try:
                     # Pass the full input data including agent_id
                     result = await target_producer.execute(received_inputs.copy(), self.ai_service)
@@ -537,7 +631,7 @@ class AbstractLiveAgentTeamChannelProducer(AbstractAgentTeamChannelProducer):
         self._completion_event = asyncio.Event()
         
         # Start entry agents
-        self.logger.info(f"Starting {len(self._entry_agents)} entry agents")
+        self.logger.debug(f"Starting {len(self._entry_agents)} entry agents")
         
         entry_tasks = []
         for entry_agent in self._entry_agents:
@@ -562,7 +656,7 @@ class AbstractLiveAgentTeamChannelProducer(AbstractAgentTeamChannelProducer):
             self.logger.error("Team execution timed out waiting for terminal agents")
             raise
         
-        self.logger.info(f"Team execution completed with {len(self._terminal_results)} results")
+        self.logger.debug(f"Team execution completed with {len(self._terminal_results)} results")
         
         # Push team result if we have a channel
         if self.channel is not None:
@@ -583,7 +677,7 @@ class AbstractLiveAgentTeamChannelProducer(AbstractAgentTeamChannelProducer):
         self._terminal_agents.clear()
         self._terminal_results.clear()
         
-        self.logger.info("Team stopped")
+        self.logger.debug("Team stopped")
 
 
 class AbstractAgentTeamChannel(AbstractAgentChannel):

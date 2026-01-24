@@ -419,7 +419,7 @@ class AbstractAIAgentChannelProducer(AbstractAgentChannelProducer, abc.ABC):
             Parsed JSON dict or raw string response.
             
         Raises:
-            RuntimeError: If all retries are exhausted.
+            Exception: If all retries are exhausted.
         """
         # Use channel's output schema as default if not explicitly provided
         effective_schema = response_schema
@@ -443,19 +443,20 @@ class AbstractAIAgentChannelProducer(AbstractAgentChannelProducer, abc.ABC):
                 return response.strip()
             except (json.JSONDecodeError, ValueError, KeyError, AttributeError) as e:
                 last_exception = e
+                error_details = str(e)
                 if attempt < self.MAX_RETRIES:
                     self.logger.warning(
                         f"LLM call failed on attempt {attempt}/{self.MAX_RETRIES} "
-                        f"for agent {self.AGENT_NAME}: {str(e)}. Retrying..."
+                        f"for agent {self.AGENT_NAME}: {error_details}. Retrying..."
                     )
                 else:
                     self.logger.error(
                         f"LLM call failed on final attempt {attempt}/{self.MAX_RETRIES} "
-                        f"for agent {self.AGENT_NAME}: {str(e)}"
+                        f"for agent {self.AGENT_NAME}: {error_details}"
                     )
         
         # All retries exhausted
-        raise RuntimeError(
+        raise Exception(
             f"LLM call failed for agent {self.AGENT_NAME} after {self.MAX_RETRIES} retries: {str(last_exception)}"
         )
     
