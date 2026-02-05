@@ -133,10 +133,14 @@ If you represent an institution that is interested in a commercial license or cu
 
 OctoBot can be deployed on the cloud or for free on your computer, server or [Raspberry Pi](https://www.raspberrypi.com/).
 
-### Deploying OctoBot with one click on DigitalOcean
+### Deploying OctoBot with one click on a cloud providere
 OctoBot can be easily launched in the cloud from the [DigitalOcean Marketplace](https://digitalocean.pxf.io/octobot-app).
 
 [![Deploy on DigitalOcean](https://mp-assets1.sfo2.digitaloceanspaces.com/deploy-to-do/do-btn-blue.svg)](https://digitalocean.pxf.io/start-octobot)
+
+And can be also easily deployed to [Koyeb](https://www.koyeb.com/).
+
+[![Deploy to Koyeb](https://www.koyeb.com/static/images/deploy/button.svg)](https://app.koyeb.com/deploy?name=octobot&type=docker&image=docker.io%2Fdrakkarsoftware%2Foctobot%3Astable&instance_type=free&service_type=web&regions=fra&instances_min=0&autoscaling_sleep_idle_delay=3900&ports=5001%3Bhttp%3B%2F&hc_protocol%5B5001%5D=tcp&hc_grace_period%5B5001%5D=5&hc_interval%5B5001%5D=30&hc_restart_limit%5B5001%5D=3&hc_timeout%5B5001%5D=5&hc_path%5B5001%5D=%2F&hc_method%5B5001%5D=get)
 
 ### Using the OctoBot Executable
 This is the easiest way to download and install OctoBot on your computer or server. Here is [our executable installation guide](https://www.octobot.cloud/en/guides/octobot-installation/install-octobot-on-your-computer?utm_source=github&utm_medium=dk&utm_campaign=regular_open_source_content&utm_content=readme_local_installation).  
