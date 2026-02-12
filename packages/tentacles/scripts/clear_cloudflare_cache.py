@@ -21,6 +21,7 @@ def _send_purge_cache_request(url: str, cloudflare_token: str, urls_to_purge: li
     ) as resp:
         if resp.status_code == 200:
             print(f"Cache purged for {', '.join(urls_to_purge)}")
+            print(resp.text)
         else:
             print(f"Error when purging cache, status: {resp.status_code}, body: {resp.text}")
 
