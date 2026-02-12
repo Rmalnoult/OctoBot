@@ -282,7 +282,7 @@ jobs:
           cache-to: type=local,dest=/tmp/.buildx-cache
   
   tentacles:
-    needs: [ build, tests ]
+    needs: [ build ]
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/')
     name: ${{ matrix.os }}${{ matrix.arch }} - Python ${{ matrix.version }} - Upload Tentacles
     runs-on: ${{ matrix.os }}
@@ -334,7 +334,6 @@ jobs:
           python packages/tentacles/scripts/clear_cloudflare_cache.py ${TARGET_BRANCH#refs/*/}
 
       - name: Publish latest tentacles
-        if: github.ref == 'refs/heads/dev' && startsWith(github.ref, 'refs/tags') != true
         env:
           S3_API_KEY: ${{ secrets.S3_API_KEY }}
           S3_API_SECRET_KEY: ${{ secrets.S3_API_SECRET_KEY }}
