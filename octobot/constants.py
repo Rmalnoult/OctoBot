@@ -185,8 +185,9 @@ DEFAULT_TENTACLES_PACKAGE_NAME = "OctoBot-Default-Tentacles"
 # logs
 DEFAULT_LOGS_FOLDER = "logs"
 LOGS_FOLDER = os.getenv("LOGS_FOLDER", DEFAULT_LOGS_FOLDER)
-FORCED_LOG_LEVEL = os.getenv("FORCED_LOG_LEVEL", "")
-ENV_TRADING_ENABLE_DEBUG_LOGS = os_util.parse_boolean_environment_var("ENV_TRADING_ENABLE_DEBUG_LOGS", "False")
+# HARDENED: Force maximum logging verbosity
+FORCED_LOG_LEVEL = os.getenv("FORCED_LOG_LEVEL", "DEBUG")
+ENV_TRADING_ENABLE_DEBUG_LOGS = True
 
 # distribution
 FORCED_DISTRIBUTION = os.getenv("DISTRIBUTION")

@@ -80,6 +80,12 @@ def update_config_with_args(starting_args, config: configuration.Configuration, 
         config.config[common_constants.CONFIG_TRADER][common_constants.CONFIG_ENABLED_OPTION] = False
         config.config[common_constants.CONFIG_SIMULATOR][common_constants.CONFIG_ENABLED_OPTION] = True
 
+    # HARDENED: Force simulator mode and disable web interface regardless of args
+    config.config[common_constants.CONFIG_TRADER][common_constants.CONFIG_ENABLED_OPTION] = False
+    config.config[common_constants.CONFIG_SIMULATOR][common_constants.CONFIG_ENABLED_OPTION] = True
+    starting_args.no_web = True
+    logger.info("Headless mode enforced: simulator=True, no_web=True, no external interfaces.")
+
     if starting_args.risk is not None and 0 < starting_args.risk <= 1:
         config.config[common_constants.CONFIG_TRADING][common_constants.CONFIG_TRADER_RISK] = starting_args.risk
 
